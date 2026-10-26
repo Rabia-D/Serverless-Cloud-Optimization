@@ -389,7 +389,7 @@ Not yet completed:
 - Investigate robustness to workload changes.
 - Assess whether added reasoning or learning complexity improves performance.
 
-## 12. Questions for Professor Daraghmeh
+## 12. Questions
 
 1. Should RL be implemented as a standalone resource-management approach, or should it use OR-Tools to enforce allocation constraints?
 
