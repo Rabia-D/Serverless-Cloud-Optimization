@@ -1,4 +1,4 @@
-policy,active_app_windows,simulated_cold_starts,cold_start_rate,total_loads,total_evictions,total_penalty_ms
-Static,2055,1882,0.9158150851581508,3149,3145,941000
-Recent activity,2055,366,0.1781021897810219,837,833,183000
-ML prediction,2055,319,0.15523114355231143,496,492,159500
+policy,active_app_windows,simulated_cold_starts,cold_start_rate,avg_warm_apps,total_loads,total_evictions,prewarm_operations,total_penalty_ms
+Static,2055,1603,0.7800486618004866,4.0,685,681,685,801500
+Recent activity,2055,231,0.11240875912408758,4.0,596,592,596,115500
+ML prediction,2055,198,0.09635036496350365,3.353233830845771,249,245,166,99000

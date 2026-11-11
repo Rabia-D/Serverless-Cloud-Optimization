@@ -3,8 +3,8 @@ import os
 import pandas as pd
 
 # ==========================================
-# SERVERLESS SIMULATOR V3
-# Stateful container lifecycle simulation
+# SERVERLESS SIMULATOR V3 — CORRECTED
+# Window-level stateful lifecycle simulation
 # ==========================================
 
 DATA_PATH = "models/policy_comparison_details.csv"
@@ -27,29 +27,41 @@ required = {
 }
 
 missing = required - set(df.columns)
+
 if missing:
     raise ValueError(f"Missing columns: {missing}")
 
 if df.duplicated(["app", "window"]).any():
     raise ValueError("Duplicate app-window records")
 
+if (df["target"] < 0).any():
+    raise ValueError("Negative invocation counts")
+
+if (df["target"].isna()).any():
+    raise ValueError("Missing invocation counts")
+
 
 def simulate(data, policy_name, policy_column):
 
-    # app -> last window in which it received demand
+    # app -> most recent activity window
     warm = {}
 
     records = []
-
     total_cold = 0
-    total_evictions = 0
     total_loads = 0
+    total_evictions = 0
+    total_prewarm = 0
     total_active = 0
+    total_warm_slots = 0
+
+    windows = data["window"].nunique()
 
     for window, group in data.groupby("window", sort=True):
 
-        # Step 1: Evict applications that have
-        # been idle beyond the retention timeout.
+        # ----------------------------------
+        # 1. EXPIRE IDLE CONTAINERS
+        # ----------------------------------
+
         expired = [
             app for app, last_used in warm.items()
             if window - last_used > IDLE_TIMEOUT
@@ -59,7 +71,10 @@ def simulate(data, policy_name, policy_column):
             del warm[app]
             total_evictions += 1
 
-        # Step 2: Policy selects preferred warm apps.
+        # ----------------------------------
+        # 2. APPLY POLICY DECISIONS
+        # ----------------------------------
+
         selected = set(
             group.loc[
                 group[policy_column] == 1, "app"
@@ -67,23 +82,26 @@ def simulate(data, policy_name, policy_column):
         )
 
         if len(selected) > MAX_WARM_APPS:
-            raise ValueError("Capacity exceeded")
+            raise ValueError("Policy exceeds capacity")
 
-        # Step 3: Prewarm selected applications.
+        # Evict unselected apps only when
+        # capacity is needed for selected apps.
         for app in sorted(selected):
 
             if app in warm:
                 continue
 
             if len(warm) >= MAX_WARM_APPS:
-                # Evict an unselected app first.
+
                 candidates = [
                     a for a in warm
                     if a not in selected
                 ]
 
                 if not candidates:
-                    candidates = list(warm)
+                    raise RuntimeError(
+                        "No evictable container available"
+                    )
 
                 victim = min(
                     candidates,
@@ -95,44 +113,115 @@ def simulate(data, policy_name, policy_column):
 
             warm[app] = window
             total_loads += 1
+            total_prewarm += 1
 
-        # Step 4: Process demand.
+        # ----------------------------------
+        # 3. SNAPSHOT STATE BEFORE DEMAND
+        # ----------------------------------
+
+        warm_before_demand = set(warm)
+
+        # All applications in this window are
+        # evaluated against the SAME snapshot.
+        # This avoids arbitrary row-order effects.
+        active_apps = set(
+            group.loc[group["target"] > 0, "app"]
+        )
+
+        cold_apps = active_apps - warm_before_demand
+
+        total_active += len(active_apps)
+        total_cold += len(cold_apps)
+
+        # ----------------------------------
+        # 4. UPDATE CONTAINER STATE
+        # ----------------------------------
+
+        # Selected warm apps are protected.
+        # Cold apps may remain warm if space exists.
+        #
+        # At most four containers can be retained.
+        # Prefer policy-selected apps, then
+        # recently active nonselected apps.
+
+        next_warm = {
+            app: warm.get(app, window)
+            for app in selected
+        }
+
+        # Update last-used times for selected
+        # apps that actually received demand.
+        for app in selected & active_apps:
+            next_warm[app] = window
+
+        # Other active apps can occupy spare slots.
+        spare_slots = MAX_WARM_APPS - len(next_warm)
+
+        nonselected_active = active_apps - selected
+
+        # Prefer containers already warm, then
+        # deterministic application ID ordering.
+        candidates = sorted(
+            nonselected_active,
+            key=lambda a: (
+                a not in warm_before_demand,
+                a
+            )
+        )
+
+        for app in candidates[:spare_slots]:
+            next_warm[app] = window
+
+        # Retain other warm containers in spare
+        # capacity, subject to idle timeout.
+        spare_slots = MAX_WARM_APPS - len(next_warm)
+
+        remaining = [
+            app for app in warm_before_demand
+            if app not in next_warm
+        ]
+
+        remaining.sort(
+            key=lambda a: (-warm[a], a)
+        )
+
+        for app in remaining[:spare_slots]:
+            next_warm[app] = warm[app]
+
+        # Count state transitions at the boundary.
+        removed = set(warm) - set(next_warm)
+        added = set(next_warm) - set(warm)
+
+        total_evictions += len(removed)
+        total_loads += len(added)
+
+        warm = next_warm
+
+        if len(warm) > MAX_WARM_APPS:
+            raise RuntimeError("Capacity exceeded")
+
+        total_warm_slots += len(warm)
+
+        # ----------------------------------
+        # 5. RECORD RESULTS
+        # ----------------------------------
+
         for _, row in group.iterrows():
 
             app = row["app"]
             count = int(row["target"])
 
-            active = count > 0
-            cold = 0
-
-            if active:
-                total_active += 1
-
-                if app not in warm:
-                    cold = 1
-                    total_cold += 1
-
-                    if len(warm) >= MAX_WARM_APPS:
-                        # Evict least recently used.
-                        victim = min(
-                            warm,
-                            key=lambda a: (warm[a], a)
-                        )
-                        del warm[victim]
-                        total_evictions += 1
-
-                    warm[app] = window
-                    total_loads += 1
-
-                else:
-                    warm[app] = window
+            cold = int(app in cold_apps)
 
             records.append({
                 "policy": policy_name,
                 "window": window,
                 "app": app,
                 "invocations": count,
-                "active": int(active),
+                "active": int(count > 0),
+                "warm_before_demand": int(
+                    app in warm_before_demand
+                ),
                 "cold_start": cold,
                 "warm_after": int(app in warm),
                 "cold_penalty_ms": (
@@ -150,8 +239,13 @@ def simulate(data, policy_name, policy_column):
             total_cold / total_active
             if total_active else 0
         ),
+        "avg_warm_apps": (
+            total_warm_slots / windows
+            if windows else 0
+        ),
         "total_loads": total_loads,
         "total_evictions": total_evictions,
+        "prewarm_operations": total_prewarm,
         "total_penalty_ms": (
             total_cold * COLD_START_PENALTY_MS
         )
@@ -161,15 +255,21 @@ def simulate(data, policy_name, policy_column):
 
 
 summaries = []
-details_list = []
+all_details = []
 
 for name, column in POLICIES.items():
-    summary, details = simulate(df, name, column)
+
+    summary, details = simulate(
+        df, name, column
+    )
+
     summaries.append(summary)
-    details_list.append(details)
+    all_details.append(details)
 
 summary_df = pd.DataFrame(summaries)
-details_df = pd.concat(details_list, ignore_index=True)
+details_df = pd.concat(
+    all_details, ignore_index=True
+)
 
 os.makedirs("models", exist_ok=True)
 
@@ -183,12 +283,17 @@ details_df.to_csv(
     index=False
 )
 
-print("\n========== SIMULATOR V3 RESULTS ==========")
-print(summary_df.to_string(index=False))
-print("==========================================")
+print("\n========== CORRECTED SIMULATOR V3 ==========")
+print(
+    summary_df.to_string(
+        index=False,
+        float_format=lambda x: f"{x:.4f}"
+    )
+)
+print("===========================================")
 
 print("\nSaved:")
 print("- models/simulator_v3_summary.csv")
 print("- models/simulator_v3_details.csv")
-print("\nSimulator V3 complete!")
+print("\nSimulation complete!")
 
