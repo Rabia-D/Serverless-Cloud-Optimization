@@ -1,0 +1,4 @@
+policy,active_app_windows,simulated_cold_start_events,simulated_cold_start_rate,avg_warm_apps,total_penalty_ms,load_operations,unload_operations
+Static,2055,1603,0.7800486618004866,4.0,801500,4,0
+Recent activity,2055,231,0.11240875912408758,4.0,115500,375,371
+ML prediction,2055,319,0.15523114355231143,2.93407960199005,159500,178,174
