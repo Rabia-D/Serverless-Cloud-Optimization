@@ -1,0 +1,4 @@
+policy,active_windows,missed_active_windows,cold_start_window_rate,warm_slot_occupancy,average_warm_apps
+Static,2055,1603,0.7800486618004866,0.4,4.0
+Recent activity,2055,231,0.11240875912408758,0.4,4.0
+ML prediction,2055,319,0.15523114355231143,0.293407960199005,2.93407960199005
