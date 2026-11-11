@@ -1,0 +1,4 @@
+policy,active_app_windows,simulated_cold_starts,cold_start_rate,total_loads,total_evictions,total_penalty_ms
+Static,2055,1882,0.9158150851581508,3149,3145,941000
+Recent activity,2055,366,0.1781021897810219,837,833,183000
+ML prediction,2055,319,0.15523114355231143,496,492,159500
